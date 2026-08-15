@@ -22,13 +22,15 @@ about genuinely new postings.
 1. Install **ntfy** from the iOS App Store or Google Play.
 2. Open it, tap **+** to subscribe to a topic.
 3. Invent an unguessable topic name — treat it like a password, because anyone
-   who knows the string can read your alerts. Something like:
+   who knows the string can read your alerts *and* push notifications to your
+   phone. Never commit the real one to this repo, which is public. Generate one:
 
-   ```
-   ritika-jobs-4kz91mqx7
+   ```bash
+   python3 -c "import secrets,string; a=string.ascii_lowercase+string.digits; print('jobs-'+''.join(secrets.choice(a) for _ in range(14)))"
    ```
 
-4. Subscribe to exactly that string. Nothing else to configure.
+4. Subscribe to exactly that string. Nothing else to configure. From here on,
+   `<YOUR-TOPIC>` in this file means that value — it is never written down here.
 
 ### Step 2: Test it locally before touching GitHub
 
@@ -46,10 +48,11 @@ moved (see "Fixing a broken company" below).
 Now prove the phone path works end to end:
 
 ```bash
-NTFY_TOPIC=ritika-jobs-4kz91mqx7 python3 poll.py --test-notify
+NTFY_TOPIC=<YOUR-TOPIC> python3 poll.py --test-notify
 ```
 
-Replace the topic with yours. Your phone should buzz within a couple of seconds.
+Replace `<YOUR-TOPIC>` with yours. Your phone should buzz within a couple of
+seconds.
 If it doesn't, the problem is the phone subscription, not the script — fix it
 here before going further.
 
@@ -82,7 +85,10 @@ In your repo on GitHub: **Settings → Secrets and variables → Actions → New
 repository secret**
 
 - Name: `NTFY_TOPIC`
-- Value: `ritika-jobs-4kz91mqx7` (your topic)
+- Value: your topic string — **nothing else**. No quotes around it, no
+  `https://ntfy.sh/` prefix, no trailing space or newline. GitHub stores exactly
+  what you paste, and a stray quote sends your alerts into the void while the
+  workflow still reports success.
 
 ### Step 5: Turn on Actions and do the first run
 
@@ -271,6 +277,25 @@ internships. To re-enable it, delete its `"ats": "none"` row and add:
 
 **GitHub's scheduler runs late.** Cron on Actions is best-effort and can drift
 10–15 minutes under load. It's a fine tradeoff for free.
+
+**Green run but no notification?** The send is fire-and-forget: `ntfy()` prints a
+warning and moves on if the POST fails, so a bad topic never turns the run red.
+Check, in order:
+
+1. Open `https://ntfy.sh/<YOUR-TOPIC>/json?poll=1` in a browser. Messages appear
+   there for ~12 hours. **Empty means the message never reached that topic** — so
+   the `NTFY_TOPIC` secret doesn't match what you subscribed to. Re-paste it.
+2. If messages *are* there but your device stayed quiet, it's a client problem:
+   notification permission in the browser, or macOS System Settings →
+   Notifications for that browser.
+3. The Actions run log, under "Poll job feeds and notify", prints
+   `ntfy send failed: ...` when the POST itself errored.
+
+**Re-testing the "armed" ping.** It only fires when there is no `seen.json`. To
+replay the full production path, delete `seen.json` from the repo on GitHub and
+run the workflow again — it re-seeds and sends that one summary ping. Otherwise
+use `--test-notify` (sends a fixed test message) or `--simulate-drop` (sends a
+real currently-open role as though it just appeared, without touching state).
 
 **Your ntfy topic is a password.** Anyone with the string can read your alerts.
 Don't paste it into screenshots, and if it leaks, just pick a new one: change
