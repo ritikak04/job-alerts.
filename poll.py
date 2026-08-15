@@ -821,7 +821,8 @@ def main():
         print("-" * 62)
         for name, ats, status, total, matched in report:
             print(f"{name:<20} {ats:<12} {status:<12} {total:>6} {matched:>8}")
-        print(f"\nTotal matching new-grad/intern AI-ML/SWE roles: {len(postings)}")
+        print(f"\nTotal matching new-grad/intern finance & analytics roles: "
+              f"{len(postings)}")
         return
 
     topic = os.environ.get("NTFY_TOPIC")
@@ -837,7 +838,7 @@ def main():
         save_seen(current_ids)
         ntfy(topic, "Job alerts armed",
              f"Monitoring started. Tracking {len(postings)} open "
-             f"new-grad/intern AI-ML/SWE roles across your targets. "
+             f"new-grad/intern finance & analytics roles across your targets. "
              f"You'll get a ping when new ones drop.", "")
         print(f"Seeded {len(current_ids)} postings, no per-role notifications.")
         return
