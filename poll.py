@@ -232,8 +232,45 @@ def adapter_workday(co):
     return out
 
 
+def adapter_oracle(co):
+    """Oracle Recruiting Cloud (JPMorgan Chase, and a long tail of Fortune 500s
+    whose careers page lives on *.fa.*.oraclecloud.com). Like Workday it is a
+    search API, so query narrow terms rather than pulling the whole board."""
+    host, site = co["host"], co.get("site", "CX_1")
+    out = []
+    for q in co.get("queries", ["analyst"]):
+        offset = 0
+        while offset < co.get("max", 100):
+            finder = (f"findReqs;siteNumber={site},limit=25,offset={offset},"
+                      f"keyword={urllib.parse.quote(q)},sortBy=POSTING_DATES_DESC")
+            url = (f"https://{host}/hcmRestApi/resources/latest/"
+                   f"recruitingCEJobRequisitions?onlyData=true"
+                   f"&expand=requisitionList.secondaryLocations&finder={finder}")
+            try:
+                data = http_json(url)
+                reqs = data["items"][0].get("requisitionList", [])
+            except Exception:
+                break
+            if not reqs:
+                break
+            for j in reqs:
+                jid = j.get("Id")
+                out.append({
+                    "id": f"oracle:{host}:{jid}",
+                    "company": co["name"],
+                    "title": j.get("Title", ""),
+                    "url": (f"https://{host}/hcmUI/CandidateExperience/en/sites/"
+                            f"{site}/job/{jid}"),
+                    "location": j.get("PrimaryLocation", ""),
+                })
+            offset += 25
+            time.sleep(0.2)
+    return out
+
+
 ADAPTERS = {
     "greenhouse": adapter_greenhouse,
+    "oracle": adapter_oracle,
     "lever": adapter_lever,
     "ashby": adapter_ashby,
     "smartrecruiters": adapter_smartrecruiters,
@@ -322,7 +359,7 @@ NOT_ENGINEERING_RE = re.compile(
     r"business development|solutions consultant|technical writer)\b")
 
 
-def matches(title, level_re, role_re, level_implied=False):
+def matches(title, level_re, role_re, level_implied=False, exclude_re=None):
     """A title must name a role we want AND read as entry-level.
 
     Entry-level is established either by the title itself (a level keyword, or
@@ -340,7 +377,16 @@ def matches(title, level_re, role_re, level_implied=False):
     4. Failing all that, a feed that lists nothing but new-grad/internship
        roles vouches for the posting, minus anything titled level II+."""
     t = title.lower()
-    if not role_re.search(t) or NOT_ENGINEERING_RE.search(t):
+    if not role_re.search(t):
+        return False
+    # filters.exclude_keywords replaces the built-in veto when set, because the
+    # right "looks like the job but isn't" list depends on what you're hunting:
+    # a SWE search must drop "Campus Recruiter, Machine Learning", a finance
+    # search must drop "IT Security Analyst" while KEEPING "Sales & Trading".
+    if exclude_re is not None:
+        if exclude_re.search(t):
+            return False
+    elif NOT_ENGINEERING_RE.search(t):
         return False
     if level_re.search(t):
         return True
@@ -437,9 +483,32 @@ NON_US_TERMS = [
     "kuwait", "bahrain", "beirut", "armenia", "yerevan", "uruguay",
     "montevideo", "peru", "lima", "costa rica", "morocco", "casablanca",
     "tunisia", "ghana", "accra", "emea", "apac", "latam",
+    # Canadian provinces/cities that reach US-facing boards (BDO, BMO, RBC, TD)
+    "ontario", "alberta", "quebec", "manitoba", "saskatchewan", "nova scotia",
+    "british columbia", "mississauga", "brampton", "kitchener", "barrie",
+    "north bay", "red deer", "winnipeg", "edmonton", "halifax", "saskatoon",
 ]
 NON_US_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(t) for t in NON_US_TERMS) + r")\b")
+
+# "US, WA, Seattle" / "IN, KA, Bengaluru" / "CR, San Jose": a leading two-letter
+# token is a COUNTRY when it is followed by another two-letter token, or when it
+# is not a US state code at all. "TX, Dallas" stays a US state.
+ISO_COUNTRY_PREFIX_RE = re.compile(
+    r"^\s*([A-Za-z]{2}),\s*(?=[A-Za-z]{2},|)", )
+
+
+def _iso_prefix(location):
+    m = ISO_COUNTRY_PREFIX_RE.match(location or "")
+    if not m:
+        return None
+    code = m.group(1).lower()
+    rest = location[m.end():]
+    # a second two-letter token means the first is definitely a country
+    if re.match(r"^[A-Za-z]{2},", rest):
+        return code
+    # otherwise only trust it when it is not also a US state code
+    return None if code in US_CODES else code
 
 
 def is_us(location, title=""):
@@ -452,6 +521,13 @@ def is_us(location, title=""):
     affirmatively looks US still wins, so "SDE Intern, London team" based in
     Seattle is kept."""
     l = (location or "").lower()
+    # Amazon-style "<COUNTRY>, <REGION>, <CITY>" ("US, WA, Seattle" /
+    # "IN, KA, Bengaluru"). The leading token is a country, not a state, so it
+    # has to be read before US_CODE_RE -- which would otherwise take the "IN"
+    # of India for Indiana and the "DE" of Germany for Delaware.
+    iso = _iso_prefix(location)
+    if iso:
+        return iso == "us"
     if location and (US_CODE_RE.search(location)
                      or any(m in l for m in US_MARKERS)):
         return True
@@ -511,13 +587,16 @@ def gather(cfg, verify=False):
     filt = cfg["filters"]
     level_re = compile_kw(filt["level_keywords"])
     role_re = compile_kw(filt["role_keywords"])
+    exclude_kw = filt.get("exclude_keywords")
+    exclude_re = compile_kw(exclude_kw) if exclude_kw else None
     exclude_phd = filt.get("exclude_phd", False)
     exclude_grad_years = filt.get("exclude_grad_years", [])
     us_only = filt.get("us_only", False)
     alias_map = build_alias_map(cfg["companies"])
 
     def keep(p):
-        if not matches(p["title"], level_re, role_re, p.get("level_implied")):
+        if not matches(p["title"], level_re, role_re, p.get("level_implied"),
+                       exclude_re):
             return False
         if exclude_phd and is_phd_only(p["title"], p.get("degrees", [])):
             return False
@@ -605,6 +684,7 @@ ENDPOINTS = {
     "eightfold": "https://{host}/api/apply/v2/jobs?domain={domain}",
     "amazon": "https://www.amazon.jobs/en/search.json",
     "workday": "https://{tenant}.{dc}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs",
+    "oracle": "https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions",
     "none": "(no public feed - covered by the aggregator feeds)",
 }
 
@@ -619,7 +699,13 @@ def endpoint_for(co):
 def write_report(cfg, postings, report):
     """Regenerate TRACKING.md: what is watched, where, and what matches now."""
     from collections import defaultdict
-    stat = {r[0]: r for r in report}
+    # One company can appear twice (a main board plus its campus board), so the
+    # rows are consumed in order rather than keyed by name -- keying would make
+    # both rows report the same numbers.
+    from collections import deque
+    pending = {}
+    for r in report:
+        pending.setdefault(r[0], deque()).append(r)
     by_co = defaultdict(list)
     for p in postings:
         by_co[p["company"]].append(p)
@@ -658,7 +744,8 @@ def write_report(cfg, postings, report):
     L.append("| Company | Source | Endpoint scraped | Open roles | Matches |\n")
     L.append("|---|---|---|---:|---:|\n")
     for c in live:
-        r = stat.get(c["name"], (None, None, "?", 0, 0))
+        q = pending.get(c["name"])
+        r = q.popleft() if q else (None, None, "?", 0, 0)
         L.append(f"| {c['name']} | {c['ats']} | `{endpoint_for(c)}` | {r[3]} | {r[4]} |\n")
 
     L.append("\n## Covered by the aggregator feeds only\n")

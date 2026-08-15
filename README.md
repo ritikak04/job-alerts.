@@ -1,7 +1,11 @@
 # job-alerts
 
-Pings my phone within ~30 min when a **new grad or internship** role in
-**AI/ML or SWE** drops at one of my target companies.
+Pings my phone within ~30 min when a **new grad, internship, or analyst-program**
+role in **finance, banking, consulting, or data/business analytics** drops at one
+of my target companies.
+
+New here? Read [SETUP.md](SETUP.md) first — it walks through getting this running
+end to end and explains how the filters were tuned for my resume.
 
 Free to run: GitHub Actions cron + [ntfy.sh](https://ntfy.sh). No server, no
 subscriptions, no API keys.
@@ -23,10 +27,12 @@ every 30 min (GitHub Actions cron)
       │                   listings.json (broad safety net, filtered to my
       │                   target companies through their name aliases)
       │
-      ├─ filter ────────► title must match a ROLE keyword (software engineer,
-      │                   machine learning, research engineer, …) AND read as
-      │                   entry-level, using word boundaries so "Internal
-      │                   Platform" is NOT treated as an internship
+      ├─ filter ────────► title must match a ROLE keyword (analyst, investment
+      │                   banking, credit, FP&A, business intelligence, …) AND
+      │                   read as entry-level, using word boundaries so "Internal
+      │                   Audit" is NOT treated as an internship. Titles hitting
+      │                   an EXCLUDE keyword (security analyst, QA analyst,
+      │                   recruiter, …) are dropped even if they matched
       │
       ├─ collapse ──────► one row per (company, title): a role listed on the
       │                   company's own board AND picked up by an aggregator
@@ -75,7 +81,7 @@ Add a row to `companies` in `sources.json`:
 ```
 
 `ats` is one of `greenhouse`, `lever`, `ashby`, `smartrecruiters`, `rippling`,
-`workday`, `eightfold`, `amazon`, or `none`. Use `none` for a company with no
+`workday`, `oracle`, `eightfold`, `amazon`, or `none`. Use `none` for a company with no
 public ATS feed — the name still gets matched against the aggregator listings,
 and `aliases` lets an aggregator's "Google" resolve to your "Google DeepMind".
 
@@ -88,7 +94,19 @@ few more fields:
 {"name": "Netflix", "ats": "eightfold", "slug": "",
  "host": "explore.jobs.netflix.net", "domain": "netflix.com",
  "queries": ["intern", "new grad"], "max": 100}
+{"name": "JPMorgan Chase", "ats": "oracle", "slug": "",
+ "host": "jpmc.fa.oraclecloud.com", "site": "CX_1001",
+ "queries": ["analyst", "intern"], "max": 100}
 ```
+
+**Finding a Workday site name:** the tenant's `robots.txt` lists them. E.g.
+`https://visa.wd5.myworkdayjobs.com/robots.txt` names both `Visa` and
+`Visa_Early_Careers`. A wrong site returns HTTP 404 and a wrong tenant/dc
+returns HTTP 422, so both are quick to tell apart.
+
+Listing a company **twice** — once for its main board, once for its campus /
+early-careers board — is supported and encouraged. Duplicate roles collapse on
+`(company, title)`, so it never doubles your pings.
 
 `queries`/`max` exist because those boards are enormous — you search them
 rather than pulling every posting.
@@ -157,6 +175,11 @@ Edit `filters` in `sources.json`.
   `developer`, `junior`. Dropping a whole `"ats": "none"` company also helps:
   those match by name against every aggregator feed, so a big employer like
   TikTok contributes a lot of rows on its own.
+- Wrong *kind* of role → add to `exclude_keywords`. It vetoes a title even when
+  the role and level keywords both matched, which is how "Cyber Security Analyst
+  Intern" gets dropped while "Sales & Trading Summer Analyst" is kept. Leave
+  `exclude_keywords` out entirely and the built-in SWE-oriented veto applies
+  instead.
 - Missing roles → add title variants companies actually use.
 - Too many pings at once → lower `max_pings` (default 10); everything past it
   arrives as one digest instead.
